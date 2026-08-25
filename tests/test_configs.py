@@ -193,6 +193,24 @@ class TestDynamoConfig:
         assert "maturin" not in cmd
         assert "git clone" not in cmd
 
+    def test_wheel_dependencies_export_exact_staged_requirements(self):
+        from srtctl.core.schema import DynamoConfig
+
+        config = DynamoConfig(
+            wheel="1.5.0.dev20260825",
+            wheel_dependencies=["nixl==1.3.2", "nixl-cu13==1.3.2"],
+        )
+
+        assert config.get_wheel_environment()["DYNAMO_EXTRA_WHEEL_SPECS"] == (
+            "nixl==1.3.2,nixl-cu13==1.3.2"
+        )
+
+    def test_wheel_dependencies_require_staged_dynamo_wheel(self):
+        from srtctl.core.schema import DynamoConfig
+
+        with pytest.raises(ValueError, match="requires dynamo.wheel"):
+            DynamoConfig(version="1.5.0", wheel_dependencies=["nixl==1.3.2"])
+
     def test_install_command_serialized_with_flock(self):
         """Install command is wrapped in a per-environment flock + sentinel.
 
@@ -927,6 +945,7 @@ class TestSetupScript:
             dynamo=DynamoConfig(
                 install=True,
                 wheel="1.2.0.dev20260426",
+                wheel_dependencies=["nixl==1.3.2", "nixl-cu13==1.3.2"],
             ),
         )
 
@@ -934,6 +953,7 @@ class TestSetupScript:
 
         assert "export DYNAMO_VERSION=1.2.0.dev20260426" in script
         assert "export DYNAMO_WHEEL_NAME=ai_dynamo-1.2.0.dev20260426-py3-none-any.whl" in script
+        assert "export DYNAMO_EXTRA_WHEEL_SPECS=nixl==1.3.2,nixl-cu13==1.3.2" in script
         assert 'uv run --no-project --python "${DYNAMO_PYTHON_VERSION:-3.12}" --with pip' in script
         assert "src/srtctl/runtime_scripts/dynamo_wheels.py" in script
         assert "configs/prefetch-ai-dynamo-wheel.sh" not in script

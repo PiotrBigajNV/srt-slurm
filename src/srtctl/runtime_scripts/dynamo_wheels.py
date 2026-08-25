@@ -11,6 +11,7 @@ import fcntl
 import importlib.metadata
 import os
 import platform
+import re
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -20,6 +21,7 @@ DEFAULT_INDEX_URL = "https://pypi.org/simple"
 DEFAULT_EXTRA_INDEX_URL = "https://pypi.nvidia.com"
 DEFAULT_PYTHON_VERSION = "3.12"
 Env = Mapping[str, str]
+EXACT_REQUIREMENT_RE = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)==(?P<version>[A-Za-z0-9][A-Za-z0-9.!+_-]*)$")
 
 
 def normalize_arch(arch: str) -> str:
@@ -73,6 +75,42 @@ def runtime_wheel_pattern(version: str, arch: str) -> str:
     return f"ai_dynamo_runtime-{version}-*{arch}.whl"
 
 
+def extra_wheel_specs(env: Env) -> list[str]:
+    """Return exact, comma-separated wheel requirements requested by the config."""
+    raw = env.get("DYNAMO_EXTRA_WHEEL_SPECS", "")
+    specs = [item.strip() for item in raw.split(",") if item.strip()]
+    for spec in specs:
+        if EXACT_REQUIREMENT_RE.fullmatch(spec) is None:
+            raise SystemExit(
+                f"ERROR: DYNAMO_EXTRA_WHEEL_SPECS entries must be exact requirements like 'nixl==1.3.2'; got {spec!r}"
+            )
+    return specs
+
+
+def wheel_pattern_for_spec(spec: str, arch: str) -> str:
+    """Build a permissive wheel filename glob for an exact requirement."""
+    normalize_arch(arch)
+    match = EXACT_REQUIREMENT_RE.fullmatch(spec)
+    if match is None:
+        raise ValueError(f"invalid exact wheel requirement {spec!r}")
+    normalized_name = re.sub(r"[-_.]+", "_", match.group("name"))
+    version = match.group("version")
+    return f"{normalized_name}-{version}-*.whl"
+
+
+def _find_extra_wheel(wheel_dirs: list[Path], spec: str, arch: str) -> Path | None:
+    """Find either a pure-Python wheel or a wheel for the requested architecture."""
+    pattern = wheel_pattern_for_spec(spec, arch)
+    arch_suffix = f"_{normalize_arch(arch)}.whl"
+    for wheel_dir in wheel_dirs:
+        if not wheel_dir.is_dir():
+            continue
+        for match in wheel_dir.glob(pattern):
+            if match.name.endswith("-none-any.whl") or match.name.endswith(arch_suffix):
+                return match
+    return None
+
+
 def platform_args_for_arch(arch: str) -> list[str]:
     match arch:
         case "aarch64":
@@ -96,6 +134,7 @@ def build_download_command(
     python_version: str,
     index_url: str,
     extra_index_url: str,
+    extra_specs: list[str] | None = None,
 ) -> list[str]:
     return [
         sys.executable,
@@ -118,6 +157,7 @@ def build_download_command(
         str(wheel_dir),
         f"ai-dynamo-runtime=={version}",
         f"ai-dynamo=={version}",
+        *(extra_specs or []),
     ]
 
 
@@ -147,6 +187,8 @@ def prefetch(env: Env | None = None) -> None:
     python_version = runtime_env.get("DYNAMO_PYTHON_VERSION", DEFAULT_PYTHON_VERSION)
     wheel_name = runtime_env.get("DYNAMO_WHEEL_NAME", f"ai_dynamo-{version}-py3-none-any.whl")
     runtime_pattern = runtime_env.get("DYNAMO_RUNTIME_WHEEL_PATTERN") or runtime_wheel_pattern(version, arch)
+    extra_specs = extra_wheel_specs(runtime_env)
+    extra_patterns = [wheel_pattern_for_spec(spec, arch) for spec in extra_specs]
     wheel_dir = Path(runtime_env.get("DYNAMO_WHEEL_HOST_DIR", source_dir / "wheelhouse" / "dynamo"))
     wheel_path = wheel_dir / wheel_name
     lock_path = wheel_dir / f".{version}.{arch}.lock"
@@ -154,7 +196,11 @@ def prefetch(env: Env | None = None) -> None:
     wheel_dir.mkdir(parents=True, exist_ok=True)
 
     def wheels_are_ready() -> bool:
-        return wheel_path.exists() and _runtime_wheel_exists(wheel_dir, version, arch, runtime_pattern)
+        return (
+            wheel_path.exists()
+            and _runtime_wheel_exists(wheel_dir, version, arch, runtime_pattern)
+            and all(_find_extra_wheel([wheel_dir], spec, arch) is not None for spec in extra_specs)
+        )
 
     if wheels_are_ready():
         print(f"ai-dynamo wheels already staged for {arch}: {wheel_dir}")
@@ -172,6 +218,7 @@ def prefetch(env: Env | None = None) -> None:
                     python_version=python_version,
                     index_url=runtime_env.get("DYNAMO_INDEX_URL", DEFAULT_INDEX_URL),
                     extra_index_url=runtime_env.get("DYNAMO_EXTRA_INDEX_URL", DEFAULT_EXTRA_INDEX_URL),
+                    extra_specs=extra_specs,
                 ),
                 check=True,
             )
@@ -180,15 +227,24 @@ def prefetch(env: Env | None = None) -> None:
         raise SystemExit(f"ERROR: expected {wheel_path} after download")
     if not _runtime_wheel_exists(wheel_dir, version, arch, runtime_pattern):
         raise SystemExit(f"ERROR: expected {runtime_pattern} in {wheel_dir} after download")
+    for spec, pattern in zip(extra_specs, extra_patterns, strict=True):
+        if _find_extra_wheel([wheel_dir], spec, arch) is None:
+            raise SystemExit(f"ERROR: expected {pattern} in {wheel_dir} after download")
 
 
-def _already_installed(version: str) -> bool:
-    for package in ("ai-dynamo", "ai-dynamo-runtime"):
+def _already_installed(version: str, extra_specs: list[str] | None = None) -> bool:
+    requirements = [f"ai-dynamo=={version}", f"ai-dynamo-runtime=={version}", *(extra_specs or [])]
+    for requirement in requirements:
+        match = EXACT_REQUIREMENT_RE.fullmatch(requirement)
+        if match is None:
+            return False
+        package = match.group("name")
+        expected_version = match.group("version")
         try:
             installed = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
             return False
-        if installed != version:
+        if installed != expected_version:
             return False
 
     try:
@@ -204,8 +260,9 @@ def install(env: Env | None = None) -> None:
     if not version:
         raise SystemExit("ERROR: DYNAMO_VERSION must be set for ai-dynamo wheel install")
 
-    if _already_installed(version):
-        print(f"ai-dynamo and ai-dynamo-runtime {version} already installed")
+    extra_specs = extra_wheel_specs(runtime_env)
+    if _already_installed(version, extra_specs):
+        print(f"ai-dynamo, ai-dynamo-runtime, and requested dependency wheels for {version} already installed")
         return
 
     arch = normalize_arch(
@@ -213,15 +270,21 @@ def install(env: Env | None = None) -> None:
     )
     wheel_name = runtime_env.get("DYNAMO_WHEEL_NAME", f"ai_dynamo-{version}-py3-none-any.whl")
     runtime_pattern = runtime_env.get("DYNAMO_RUNTIME_WHEEL_PATTERN") or runtime_wheel_pattern(version, arch)
+    extra_patterns = [wheel_pattern_for_spec(spec, arch) for spec in extra_specs]
     wheel_dirs = [Path(item) for item in runtime_env.get("DYNAMO_WHEEL_DIRS", "/srtctl-wheels").split()]
 
     dynamo_wheel = _find_one(wheel_dirs, wheel_name)
     runtime_wheel = _find_one(wheel_dirs, runtime_pattern)
-    if dynamo_wheel is None or runtime_wheel is None:
+    missing_extra_patterns = [
+        pattern
+        for spec, pattern in zip(extra_specs, extra_patterns, strict=True)
+        if _find_extra_wheel(wheel_dirs, spec, arch) is None
+    ]
+    if dynamo_wheel is None or runtime_wheel is None or missing_extra_patterns:
         dirs = " ".join(str(path) for path in wheel_dirs)
         raise SystemExit(
             f"ERROR: exact ai-dynamo wheels for {version} were not found in {dirs}\n"
-            f"ERROR: expected {wheel_name} and {runtime_pattern}"
+            f"ERROR: expected {wheel_name}, {runtime_pattern}, and {', '.join(extra_patterns) or 'no extra wheels'}"
         )
 
     find_links_args: list[str] = []
@@ -229,7 +292,7 @@ def install(env: Env | None = None) -> None:
         if wheel_dir.is_dir():
             find_links_args.extend(["--find-links", str(wheel_dir)])
 
-    print(f"Installing ai-dynamo-runtime and ai-dynamo {version} from local wheels")
+    print(f"Installing ai-dynamo-runtime, ai-dynamo {version}, and requested dependencies from local wheels")
     subprocess.run(
         [
             sys.executable,
@@ -242,11 +305,14 @@ def install(env: Env | None = None) -> None:
             *find_links_args,
             f"ai-dynamo-runtime=={version}",
             f"ai-dynamo=={version}",
+            *extra_specs,
         ],
         check=True,
     )
 
     importlib.import_module("dynamo.llm")
+    if any(spec.startswith("nixl==") for spec in extra_specs):
+        importlib.import_module("nixl._api")
 
 
 def main() -> None:

@@ -31,6 +31,7 @@ def test_download_command_uses_target_arch(tmp_path: Path):
         python_version="3.12",
         index_url="https://pypi.org/simple",
         extra_index_url="https://pypi.nvidia.com",
+        extra_specs=["nixl==1.3.2", "nixl-cu13==1.3.2"],
     )
 
     assert "--platform" in command
@@ -39,6 +40,20 @@ def test_download_command_uses_target_arch(tmp_path: Path):
     assert "manylinux_2_28_x86_64" not in command
     assert "--python-version" in command
     assert "3.12" in command
+    assert command[-2:] == ["nixl==1.3.2", "nixl-cu13==1.3.2"]
+
+
+def test_extra_wheel_patterns_support_platform_and_pure_python_wheels():
+    assert dynamo_wheels.wheel_pattern_for_spec("nixl==1.3.2", "aarch64") == "nixl-1.3.2-*.whl"
+    assert dynamo_wheels.wheel_pattern_for_spec("nixl-cu13==1.3.2", "aarch64") == "nixl_cu13-1.3.2-*.whl"
+
+
+def test_extra_wheel_lookup_rejects_wrong_arch(tmp_path: Path):
+    (tmp_path / "nixl_cu13-1.3.2-cp312-cp312-manylinux_2_28_x86_64.whl").touch()
+    assert dynamo_wheels._find_extra_wheel([tmp_path], "nixl-cu13==1.3.2", "aarch64") is None
+
+    (tmp_path / "nixl_cu13-1.3.2-cp312-cp312-manylinux_2_28_aarch64.whl").touch()
+    assert dynamo_wheels._find_extra_wheel([tmp_path], "nixl-cu13==1.3.2", "aarch64") is not None
 
 
 def test_prefetch_does_not_accept_runtime_wheel_for_wrong_arch(monkeypatch, tmp_path: Path):
@@ -79,7 +94,7 @@ def test_install_requires_runtime_wheel_for_compute_arch(monkeypatch, tmp_path: 
     (wheel_dir / f"ai_dynamo-{version}-py3-none-any.whl").touch()
     (wheel_dir / f"ai_dynamo_runtime-{version}-cp312-abi3-manylinux_2_28_x86_64.whl").touch()
 
-    monkeypatch.setattr(dynamo_wheels, "_already_installed", lambda _version: False)
+    monkeypatch.setattr(dynamo_wheels, "_already_installed", lambda _version, _extra_specs=None: False)
 
     with pytest.raises(SystemExit, match="aarch64"):
         dynamo_wheels.install(

@@ -1298,6 +1298,8 @@ class DynamoConfig:
         top_of_tree: Clone repo at HEAD (latest)
         wheel: ai-dynamo package version to install via staged wheels. The
                matching ai-dynamo-runtime wheel is installed automatically.
+        wheel_dependencies: Additional exact wheel requirements to stage and
+                            install with ``wheel`` (for example, NIXL CUDA wheels).
         request_plane: Request plane to use (default: "tcp"). Valid values: "nats", "tcp", "http"
         event_plane: Event plane override, sets DYN_EVENT_PLANE (default: None — follow
                      the Dynamo image's own default). Valid values: "nats", "zmq"
@@ -1313,6 +1315,7 @@ class DynamoConfig:
     hash: str | None = None
     top_of_tree: bool = False
     wheel: str | None = None
+    wheel_dependencies: list[str] | None = None
     request_plane: str = "tcp"
     event_plane: str | None = None
     # Optional dependency-declaration overrides applied to the dynamo Cargo.toml tree before a
@@ -1343,6 +1346,16 @@ class DynamoConfig:
                 raise ValueError("dynamo.wheel must be a non-empty package version")
             if Path(self.wheel).name.endswith(".whl") or "/" in self.wheel:
                 raise ValueError("dynamo.wheel must be a package version like '1.2.0.dev20260426', not a filename")
+
+        if self.wheel_dependencies:
+            if self.wheel is None:
+                raise ValueError("dynamo.wheel_dependencies requires dynamo.wheel")
+            for requirement in self.wheel_dependencies:
+                if "," in requirement or "==" not in requirement or any(char.isspace() for char in requirement):
+                    raise ValueError(
+                        "dynamo.wheel_dependencies entries must be exact requirements "
+                        f"like 'nixl==1.3.2'; got {requirement!r}"
+                    )
 
         if self.cargo_patches and self.hash is None:
             raise ValueError("dynamo.cargo_patches requires a source build — set dynamo.hash to a commit")
@@ -1383,6 +1396,8 @@ class DynamoConfig:
         version = self.wheel_version
         if version:
             env["DYNAMO_VERSION"] = version
+        if self.wheel_dependencies:
+            env["DYNAMO_EXTRA_WHEEL_SPECS"] = ",".join(self.wheel_dependencies)
         return env
 
     def get_install_commands(self) -> str:
