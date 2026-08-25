@@ -729,10 +729,17 @@ class BenchmarkStageMixin:
         """Get environment variables for the benchmark script."""
         from srtctl.benchmarks.base import AIPerfBenchmarkRunner
 
-        is_custom = self.config.benchmark.type == "custom"
-        logical_endpoints = self._logical_worker_endpoints() if self.config.profiling.enabled or is_custom else None
+        # Benchmarks that drive an AIPerf client they own rather than inheriting
+        # from AIPerfBenchmarkRunner. They need the logical-worker view: a custom
+        # command because it may wrap AIPerf any way it likes, and agentx because
+        # the InferenceX harness polls AIPERF_SERVER_METRICS_URLS to decide when
+        # the deployment has drained between concurrencies.
+        wraps_own_aiperf = self.config.benchmark.type in ("custom", "agentx")
+        logical_endpoints = (
+            self._logical_worker_endpoints() if self.config.profiling.enabled or wraps_own_aiperf else None
+        )
         env = self._get_benchmark_profiling_env(runner, logical_endpoints)
-        if is_custom:
+        if wraps_own_aiperf:
             assert logical_endpoints is not None
             env.update(self._get_worker_endpoint_env(logical_endpoints))
         env["SRTCTL_FRONTEND_TYPE"] = self.config.frontend.type
@@ -759,11 +766,12 @@ class BenchmarkStageMixin:
             env.update(self._get_sa_bench_slow_down_env())
 
         # Built-in AIPerf runners retain physical-process metrics for vLLM DP.
-        # Custom commands commonly wrap AIPerf but do not inherit from its base
-        # class, so give them the logical-worker view needed by SGLang TP.
+        # Custom commands and agentx drive their own AIPerf without inheriting
+        # from its base class, so give them the logical-worker view needed by
+        # SGLang TP.
         if isinstance(runner, AIPerfBenchmarkRunner):
             env.update(self._get_aiperf_server_metrics_env())
-        elif is_custom:
+        elif wraps_own_aiperf:
             assert logical_endpoints is not None
             env.update(self._get_aiperf_server_metrics_env(logical_endpoints, logical_workers_only=True))
         if isinstance(runner, AIPerfBenchmarkRunner) and self.config.benchmark.aiperf_package:
