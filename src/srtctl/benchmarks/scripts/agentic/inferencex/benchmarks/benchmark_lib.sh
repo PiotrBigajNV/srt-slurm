@@ -1775,6 +1775,12 @@ build_replay_cmd() {
     REPLAY_CMD+=" --model $MODEL"
     REPLAY_CMD+=" --concurrency $CONC"
     REPLAY_CMD+=" --benchmark-duration $duration"
+    # Optionally extend only the post-duration drain window so slow requests
+    # admitted before the benchmark boundary can finish and contribute their
+    # response metrics. The measured load window remains exactly $duration.
+    if [[ -n "${AGENTIC_BENCHMARK_GRACE_PERIOD:-}" ]]; then
+        REPLAY_CMD+=" --benchmark-grace-period ${AGENTIC_BENCHMARK_GRACE_PERIOD}"
+    fi
     REPLAY_CMD+=" --stats-interval 30"
     REPLAY_CMD+=" --random-seed 42"
     # Fail runs once more than 10% of requests error. This keeps known

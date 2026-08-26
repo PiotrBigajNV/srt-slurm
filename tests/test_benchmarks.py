@@ -1038,6 +1038,30 @@ class TestAgenticRunner:
         errors = runner.validate_config(config)
         assert any("num-dataset-entries" in error for error in errors)
 
+    def test_validate_requires_positive_benchmark_grace_period(self):
+        """The optional AgentX drain override must be a positive integer."""
+        from srtctl.benchmarks.agentic import AgenticRunner
+        from srtctl.core.schema import BenchmarkConfig, ModelConfig, ResourceConfig, SrtConfig
+
+        runner = AgenticRunner()
+        config = SrtConfig(
+            name="test",
+            model=ModelConfig(path="/model", container="/image", precision="fp4"),
+            resources=ResourceConfig(gpu_type="b300"),
+            benchmark=BenchmarkConfig(
+                type="agentic",
+                concurrency=1,
+                env={"AGENTIC_BENCHMARK_GRACE_PERIOD": "0"},
+            ),
+        )
+
+        errors = runner.validate_config(config)
+        assert any("AGENTIC_BENCHMARK_GRACE_PERIOD must be positive" in error for error in errors)
+
+        config.benchmark.env["AGENTIC_BENCHMARK_GRACE_PERIOD"] = "600"
+        errors = runner.validate_config(config)
+        assert not any("AGENTIC_BENCHMARK_GRACE_PERIOD" in error for error in errors)
+
     def test_agentic_benchmark_lib_does_not_extend_tot_with_synthesis_max_osl(self):
         """The exact ToT command has no srt-slurm-only synthesis cap."""
         script = SCRIPTS_DIR / "agentic" / "inferencex" / "benchmarks" / "benchmark_lib.sh"
@@ -1056,6 +1080,8 @@ class TestAgenticRunner:
         assert 'REPLAY_CMD+=" --warmup-requests-per-lane $warmup_requests_per_lane"' in text
         assert "AGENTIC_WARMUP_GRACE_PERIOD" in text
         assert 'REPLAY_CMD+=" --warmup-grace-period ${AGENTIC_WARMUP_GRACE_PERIOD:-1800}"' in text
+        assert 'if [[ -n "${AGENTIC_BENCHMARK_GRACE_PERIOD:-}" ]]; then' in text
+        assert 'REPLAY_CMD+=" --benchmark-grace-period ${AGENTIC_BENCHMARK_GRACE_PERIOD}"' in text
 
     def test_agentic_benchmark_lib_uses_tot_runtime_tree_idle_cap(self):
         """ToT applies the 300-second runtime cap to each trajectory tree."""
@@ -1133,7 +1159,7 @@ class TestAgenticRunner:
         )
         assert "commit=f6c1f5b5d122bc4a62b93c9bd2919dfef68ccbcd" in inferencex_manifest
         assert hashlib.sha256(benchmark_lib.read_bytes()).hexdigest() == (
-            "bb65f69ec8bec16c95e0f59779e94e02efff1ecc57b663d16e52e4121e3aae36"
+            "08cea21fa4899ef37004b36e4b9887ab502919ab42152122022c0f6708877d71"
         )
         assert hashlib.sha256(agentic_srt.read_bytes()).hexdigest() == (
             "9f68b35323b11f2261c20b2f6fdc5df0902f81f2c2ec1d94840e1df7cde2b898"
@@ -1195,6 +1221,7 @@ class TestAgenticRunner:
             '--trajectory-start-max-ratio 0.75',
             '--warmup-requests-per-lane $warmup_requests_per_lane',
             '--warmup-grace-period ${AGENTIC_WARMUP_GRACE_PERIOD:-1800}',
+            '--benchmark-grace-period ${AGENTIC_BENCHMARK_GRACE_PERIOD}',
             '--use-server-token-count',
             '--no-gpu-telemetry',
             '--tokenizer-trust-remote-code',

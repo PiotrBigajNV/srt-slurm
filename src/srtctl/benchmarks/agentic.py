@@ -92,6 +92,20 @@ class AgenticRunner(AIPerfBenchmarkRunner):
         except (TypeError, ValueError):
             errors.append(f"benchmark.duration must be an integer, got: {duration}")
 
+        benchmark_grace = b.env.get("AGENTIC_BENCHMARK_GRACE_PERIOD")
+        if benchmark_grace is not None:
+            try:
+                if int(str(benchmark_grace)) <= 0:
+                    errors.append(
+                        "benchmark.env.AGENTIC_BENCHMARK_GRACE_PERIOD must be positive, "
+                        f"got: {benchmark_grace}"
+                    )
+            except (TypeError, ValueError):
+                errors.append(
+                    "benchmark.env.AGENTIC_BENCHMARK_GRACE_PERIOD must be an integer, "
+                    f"got: {benchmark_grace}"
+                )
+
         kv_offloading = str(_env_or_attr(config, "kv_offloading", "KV_OFFLOADING", "none") or "none")
         kv_backend = str(_env_or_attr(config, "kv_offload_backend", "KV_OFFLOAD_BACKEND", "") or "")
         kv_backend_metadata_raw = b.env.get("KV_OFFLOAD_BACKEND_METADATA")
