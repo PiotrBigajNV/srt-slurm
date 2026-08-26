@@ -471,6 +471,11 @@ class VLLMProtocol:
         - ``MOONCAKE_LOCAL_HOSTNAME`` defaults to the worker's resolved IP for
           multi-node peer transfers, but a value in ``mooncake_kv_store.env``
           wins (use this to pin to a specific RDMA NIC IP).
+        - ``VLLM_DP_MASTER_IP`` defaults to the effective Mooncake local
+          hostname. vLLM reuses this value when advertising the prefill
+          bootstrap server for ``MooncakeConnector``; its loopback default is
+          unreachable from a decode worker on another node. A value in
+          ``mooncake_kv_store.env`` still wins.
         - ``MOONCAKE_CONFIG_PATH`` points to the JSON file srtslurm writes at
           job start (mounted into the container at ``/logs``). vLLM's
           ``MooncakeStoreConnector`` requires this — it does not read the
@@ -478,8 +483,10 @@ class VLLMProtocol:
         """
         if self.mooncake_kv_store is None:
             return {}
+        local_address = self.mooncake_kv_store.env.get("MOONCAKE_LOCAL_HOSTNAME", local_hostname)
         return {
             "MOONCAKE_LOCAL_HOSTNAME": local_hostname,
+            "VLLM_DP_MASTER_IP": local_address,
             **self.mooncake_kv_store.env,
             "MOONCAKE_MASTER": f"{infra_node_ip}:{MOONCAKE_MASTER_PORT}",
             "MOONCAKE_TE_META_DATA_SERVER": (f"http://{infra_node_ip}:{MOONCAKE_HTTP_METADATA_PORT}/metadata"),

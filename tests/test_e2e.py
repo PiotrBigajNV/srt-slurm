@@ -795,6 +795,7 @@ class TestVLLMMooncakeKVStore:
             "MOONCAKE_MASTER": f"10.0.0.1:{MOONCAKE_MASTER_PORT}",
             "MOONCAKE_TE_META_DATA_SERVER": f"http://10.0.0.1:{MOONCAKE_HTTP_METADATA_PORT}/metadata",
             "MOONCAKE_LOCAL_HOSTNAME": "10.0.0.42",
+            "VLLM_DP_MASTER_IP": "10.0.0.42",
             "MOONCAKE_CONFIG_PATH": "/logs/mooncake_store_config.json",
         }
 
@@ -812,7 +813,7 @@ class TestVLLMMooncakeKVStore:
         assert env["MOONCAKE_MASTER"] == f"10.0.0.1:{MOONCAKE_MASTER_PORT}"
 
     def test_vllm_mooncake_local_hostname_user_can_override(self):
-        """User MOONCAKE_LOCAL_HOSTNAME overrides the auto-resolved value."""
+        """User Mooncake hostname also becomes vLLM's cross-node bootstrap IP."""
         from srtctl.backends.vllm import VLLMMooncakeKVStoreConfig, VLLMProtocol
 
         backend = VLLMProtocol(
@@ -822,6 +823,23 @@ class TestVLLMMooncakeKVStore:
         )
         env = backend.get_mooncake_worker_env("10.0.0.1", "10.0.0.42")
         assert env["MOONCAKE_LOCAL_HOSTNAME"] == "rdma-nic-ip"
+        assert env["VLLM_DP_MASTER_IP"] == "rdma-nic-ip"
+
+    def test_vllm_mooncake_dp_master_ip_user_can_override(self):
+        """User can advertise a bootstrap address distinct from the RDMA NIC."""
+        from srtctl.backends.vllm import VLLMMooncakeKVStoreConfig, VLLMProtocol
+
+        backend = VLLMProtocol(
+            mooncake_kv_store=VLLMMooncakeKVStoreConfig(
+                env={
+                    "MOONCAKE_LOCAL_HOSTNAME": "rdma-nic-ip",
+                    "VLLM_DP_MASTER_IP": "bootstrap-ip",
+                }
+            )
+        )
+        env = backend.get_mooncake_worker_env("10.0.0.1", "10.0.0.42")
+        assert env["MOONCAKE_LOCAL_HOSTNAME"] == "rdma-nic-ip"
+        assert env["VLLM_DP_MASTER_IP"] == "bootstrap-ip"
 
     def test_vllm_mooncake_loads_from_yaml(self):
         """vLLM mooncake_kv_store round-trips through YAML deserialization."""
