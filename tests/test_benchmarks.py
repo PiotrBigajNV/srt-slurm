@@ -1158,9 +1158,12 @@ class TestAgenticRunner:
             / "agentic_srt.sh"
         )
         assert "commit=f6c1f5b5d122bc4a62b93c9bd2919dfef68ccbcd" in inferencex_manifest
-        assert hashlib.sha256(benchmark_lib.read_bytes()).hexdigest() == (
+        benchmark_lib_sha256 = hashlib.sha256(benchmark_lib.read_bytes()).hexdigest()
+        assert benchmark_lib_sha256 == (
             "08cea21fa4899ef37004b36e4b9887ab502919ab42152122022c0f6708877d71"
         )
+        assert f"benchmark_lib_sha256={benchmark_lib_sha256}" in inferencex_manifest
+        assert f'PINNED_BENCHMARK_LIB_SHA256="{benchmark_lib_sha256}"' in text
         assert hashlib.sha256(agentic_srt.read_bytes()).hexdigest() == (
             "9f68b35323b11f2261c20b2f6fdc5df0902f81f2c2ec1d94840e1df7cde2b898"
         )
