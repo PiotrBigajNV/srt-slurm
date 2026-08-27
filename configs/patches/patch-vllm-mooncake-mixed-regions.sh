@@ -29,6 +29,7 @@ old_validation = '''def _validate_asymmetric_region_lengths(
     producer_cache_replicated: bool,
 ) -> str | None:
     """Validate transfer-region metadata for a fixed producer/consumer pair.
+
     This checks registered KV regions, not per-request block counts. A region
     corresponds to one registered KV tensor, or one K/V half after expansion
     for layouts that store K and V together.
@@ -41,6 +42,7 @@ old_validation = '''def _validate_asymmetric_region_lengths(
 
     if producer_cache_replicated:
         return None
+
     tp_ratio = _get_tp_ratio(local_tp_size, remote_tp_size)
     for idx, (local_region, remote_region) in enumerate(
         zip(local_regions, remote_regions)
@@ -69,6 +71,7 @@ old_validation = '''def _validate_asymmetric_region_lengths(
                     f"{idx}: local={local_region.kv_block_len}, "
                     f"remote={remote_region.kv_block_len}, tp_ratio={tp_ratio}."
                 )
+
     return None
 '''
 new_validation = '''def _validate_asymmetric_region_lengths(
